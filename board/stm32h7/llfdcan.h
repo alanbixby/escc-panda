@@ -164,8 +164,16 @@ bool llcan_init(FDCAN_GlobalTypeDef *FDCANx) {
     FDCANx->CCCR |= FDCAN_CCCR_TXP;
     // Disable protocol exception handling
     FDCANx->CCCR |= FDCAN_CCCR_PXHD;
-    // FD with BRS
-    FDCANx->CCCR |= (FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE);
+    if (bus_config[bus_number].canfd_enabled) {
+      FDCANx->CCCR |= FDCAN_CCCR_FDOE;
+      if (bus_config[bus_number].brs_enabled) {
+        FDCANx->CCCR |= FDCAN_CCCR_BRSE;
+      } else {
+        FDCANx->CCCR &= ~(FDCAN_CCCR_BRSE);
+      }
+    } else {
+      FDCANx->CCCR &= ~(FDCAN_CCCR_FDOE | FDCAN_CCCR_BRSE);
+    }
 
     // Set TX mode to FIFO
     FDCANx->TXBC &= ~(FDCAN_TXBC_TFQM);

@@ -65,11 +65,14 @@ void update_can_health_pkt(uint8_t can_number, uint32_t ir_reg) {
     if ((ir_reg & (FDCAN_IR_RF0L)) != 0U) {
       can_health[can_number].total_rx_lost_cnt += 1U;
     }
-    // Cases:
-    // 1. while multiplexing between buses 1 and 3 we are getting ACK errors that overwhelm CAN core, by resetting it recovers faster
-    // 2. H7 gets stuck in bus off recovery state indefinitely
-    if ((((can_health[can_number].last_error == CAN_ACK_ERROR) || (can_health[can_number].last_data_error == CAN_ACK_ERROR)) && (can_health[can_number].transmit_error_cnt > 127U)) ||
-     ((ir_reg & FDCAN_IR_BO) != 0U)) {
+    // Reset on ACK errors only when automatic retransmission can pin TX; DAR
+    // already cancels failed transmissions. Always reset on bus-off recovery.
+    const bool ack_error_passive = ((can_health[can_number].last_error == CAN_ACK_ERROR) ||
+                                    (can_health[can_number].last_data_error == CAN_ACK_ERROR)) &&
+                                   (can_health[can_number].transmit_error_cnt > 127U);
+    const bool dar_enabled = ((FDCANx->CCCR & FDCAN_CCCR_DAR) != 0U);
+    const bool bus_off = ((ir_reg & FDCAN_IR_BO) != 0U);
+    if ((ack_error_passive && !dar_enabled) || bus_off) {
       can_clear_send(FDCANx, can_number);
     }
   }
@@ -102,10 +105,14 @@ void process_can(uint8_t can_number) {
           fifo->header[0] = (to_send.extended << 30) | ((to_send.extended != 0U) ? (to_send.addr) : (to_send.addr << 18));
 
           // If canfd_auto is set, outgoing packets will be automatically sent as CAN-FD if an incoming CAN-FD packet was seen
-          bool fd = bus_config[can_number].canfd_auto ? bus_config[can_number].canfd_enabled : (bool)(to_send.fd > 0U);
+#ifdef ESCC
+          bool fd = false;
+#else
+          bool fd = bus_config[bus_number].canfd_auto ? bus_config[bus_number].canfd_enabled : (bool)(to_send.fd > 0U);
+#endif
           uint32_t canfd_enabled_header = fd ? (1UL << 21) : 0UL;
 
-          uint32_t brs_enabled_header = bus_config[can_number].brs_enabled ? (1UL << 20) : 0UL;
+          uint32_t brs_enabled_header = (fd && bus_config[bus_number].brs_enabled) ? (1UL << 20) : 0UL;
           fifo->header[1] = (to_send.data_len_code << 16) | canfd_enabled_header | brs_enabled_header;
 
           uint8_t data_len_w = (dlc_to_len[to_send.data_len_code] / 4U);
@@ -191,10 +198,17 @@ void can_rx(uint8_t can_number) {
     }
     can_set_checksum(&to_push);
 
+#ifdef ESCC
+    if (canfd_frame) {
+      FDCANx->RXF0A = rx_fifo_idx;
+      continue;
+    }
+#endif
+
     // forwarding (panda only)
     int bus_fwd_num = safety_fwd_hook(bus_number, to_push.addr);
     if (bus_fwd_num < 0) {
-      bus_fwd_num = bus_config[can_number].forwarding_bus;
+      bus_fwd_num = bus_config[bus_number].forwarding_bus;
     }
     if (bus_fwd_num != -1) {
       CANPacket_t to_send;
@@ -220,11 +234,11 @@ void can_rx(uint8_t can_number) {
     rx_buffer_overflow += can_push(&can_rx_q, &to_push) ? 0U : 1U;
 
     // Enable CAN FD and BRS if CAN FD message was received
-    if (!(bus_config[can_number].canfd_enabled) && (canfd_frame)) {
-      bus_config[can_number].canfd_enabled = true;
+    if (!(bus_config[bus_number].canfd_enabled) && (canfd_frame)) {
+      bus_config[bus_number].canfd_enabled = true;
     }
-    if (!(bus_config[can_number].brs_enabled) && (brs_frame)) {
-      bus_config[can_number].brs_enabled = true;
+    if (!(bus_config[bus_number].brs_enabled) && (brs_frame)) {
+      bus_config[bus_number].brs_enabled = true;
     }
 
     // update read index

@@ -109,15 +109,16 @@ int comms_control_handler(ControlPacket_t *req, uint8_t *resp) {
     // **** 0xc2: CAN health stats
     case 0xc2:
       COMPILE_TIME_ASSERT(sizeof(can_health_t) <= USBPACKET_MAX_SIZE);
-      if (req->param1 < 3U) {
-        update_can_health_pkt(req->param1, 0U);
-        can_health[req->param1].can_speed = (bus_config[req->param1].can_speed / 10U);
-        can_health[req->param1].can_data_speed = (bus_config[req->param1].can_data_speed / 10U);
-        can_health[req->param1].canfd_enabled = bus_config[req->param1].canfd_enabled;
-        can_health[req->param1].brs_enabled = bus_config[req->param1].brs_enabled;
-        can_health[req->param1].canfd_non_iso = bus_config[req->param1].canfd_non_iso;
-        resp_len = sizeof(can_health[req->param1]);
-        (void)memcpy(resp, (uint8_t*)(&can_health[req->param1]), resp_len);
+      if (req->param1 < PANDA_CAN_CNT) {
+        uint8_t can_number = CAN_NUM_FROM_BUS_NUM(req->param1);
+        update_can_health_pkt(can_number, 0U);
+        can_health[can_number].can_speed = (bus_config[req->param1].can_speed / 10U);
+        can_health[can_number].can_data_speed = (bus_config[req->param1].can_data_speed / 10U);
+        can_health[can_number].canfd_enabled = bus_config[req->param1].canfd_enabled;
+        can_health[can_number].brs_enabled = bus_config[req->param1].brs_enabled;
+        can_health[can_number].canfd_non_iso = bus_config[req->param1].canfd_non_iso;
+        resp_len = sizeof(can_health[can_number]);
+        (void)memcpy(resp, (uint8_t*)(&can_health[can_number]), resp_len);
       }
       break;
     // **** 0xc3: fetch MCU UID
