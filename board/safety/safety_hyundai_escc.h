@@ -15,9 +15,31 @@ uint32_t sunnypilot_detected_last = 0;
 // Initialize bytes to send to 2AB
 ESCC_Msg escc = {0};
 
+#ifdef ESCC_DIAG
+typedef struct {
+  uint32_t car_to_radar_forwarded;
+  uint32_t radar_to_car_forwarded;
+  uint32_t scc_blocked_car_to_radar;
+  uint32_t scc_blocked_radar_to_car;
+  uint32_t queue_pressure_drops;
+  uint32_t canfd_frames_dropped;
+  uint32_t non_scc_car_to_radar_frames;
+  uint32_t fca11_fail_frames_bus2;
+} ESCC_DiagCounters;
+
+ESCC_DiagCounters escc_diag_counters = {0};
+
+static void escc_diag_reset(void) {
+  escc_diag_counters = (ESCC_DiagCounters){0};
+}
+#endif
+
 static safety_config escc_init(uint16_t param) {
   scc_block_allowed = false;
   sunnypilot_detected_last = 0U;
+#ifdef ESCC_DIAG
+  escc_diag_reset();
+#endif
   // Reuse alloutput controls setup; ESCC forwarding does not read alloutput_passthrough.
   return alloutput_init(param);
 }
@@ -62,6 +84,11 @@ static void escc_rx_hook(const CANPacket_t* to_push) {
         escc.cf_vsm_warn_fca11 = GET_BYTE(to_push, 0) >> 3 & 0x3U;
         escc.cf_vsm_deccmdact_fca11 = GET_BYTE(to_push, 3) >> 7 & 1U;
         escc.cr_vsm_deccmd_fca11 = GET_BYTE(to_push, 1);
+#ifdef ESCC_DIAG
+        if ((GET_LEN(to_push) > 4U) && ((GET_BYTE(to_push, 4) & 0x7U) != 0U)) {
+          escc_diag_counters.fca11_fail_frames_bus2 += 1U;
+        }
+#endif
         break;
 
       default: ;
@@ -100,7 +127,13 @@ static int escc_fwd_hook(const int bus_src, const int addr) {
 
   int bus_dst = DEVNULL_BUS;
   if (bus_src == CAR_BUS) {
-    bus_dst = (can_slots_empty(can_queues[RADAR_BUS]) >= RADAR_TX_QUEUE_MIN_SLOTS) ? RADAR_BUS : DEVNULL_BUS;
+    const bool radar_queue_has_space = can_slots_empty(can_queues[RADAR_BUS]) >= RADAR_TX_QUEUE_MIN_SLOTS;
+    bus_dst = radar_queue_has_space ? RADAR_BUS : DEVNULL_BUS;
+#ifdef ESCC_DIAG
+    if (!radar_queue_has_space) {
+      escc_diag_counters.queue_pressure_drops += 1U;
+    }
+#endif
   } else if (bus_src == RADAR_BUS) {
     bus_dst = CAR_BUS;
   } else {
@@ -109,8 +142,28 @@ static int escc_fwd_hook(const int bus_src, const int addr) {
 
   // If we are allowed to block, and this is an scc msg coming from radar (or somehow we are sending it TO the radar) we block
   if (scc_block_allowed && is_scc_msg && (bus_src == RADAR_BUS || bus_dst == RADAR_BUS)) {
+#ifdef ESCC_DIAG
+    if (bus_src == CAR_BUS) {
+      escc_diag_counters.scc_blocked_car_to_radar += 1U;
+    } else if (bus_src == RADAR_BUS) {
+      escc_diag_counters.scc_blocked_radar_to_car += 1U;
+    } else {
+    }
+#endif
     bus_dst = DEVNULL_BUS;
   }
+
+#ifdef ESCC_DIAG
+  if ((bus_src == CAR_BUS) && (bus_dst == RADAR_BUS)) {
+    escc_diag_counters.car_to_radar_forwarded += 1U;
+    if (!is_scc_msg) {
+      escc_diag_counters.non_scc_car_to_radar_frames += 1U;
+    }
+  } else if ((bus_src == RADAR_BUS) && (bus_dst == CAR_BUS)) {
+    escc_diag_counters.radar_to_car_forwarded += 1U;
+  } else {
+  }
+#endif
 
   return bus_dst;
 }

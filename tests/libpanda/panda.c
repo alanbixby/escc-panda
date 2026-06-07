@@ -16,6 +16,14 @@ void can_tx_comms_resume_spi(void) { };
 #include "libc.h"
 #include "boards/board_declarations.h"
 #include "safety.h"
+
+#ifdef ESCC
+void send_escc_msg(const ESCC_Msg *msg, int bus_number) {
+  UNUSED(msg);
+  UNUSED(bus_number);
+}
+#endif
+
 #include "main_definitions.h"
 #include "drivers/can_common.h"
 

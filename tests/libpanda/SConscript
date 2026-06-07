@@ -1,4 +1,5 @@
 import platform
+import os
 
 CC = 'gcc'
 system = platform.system()
@@ -40,6 +41,11 @@ if GetOption('ubsan'):
   ]
   env['CFLAGS'] += flags
   env['LINKFLAGS'] += flags
+
+if os.getenv("ESCC") or os.getenv("ESCC_DIAG"):
+  env['CFLAGS'] += ["-DESCC"]
+if os.getenv("ESCC_DIAG"):
+  env['CFLAGS'] += ["-DESCC_DIAG"]
 
 panda = env.SharedObject("panda.os", "panda.c")
 libpanda = env.SharedLibrary("libpanda.so", [panda])

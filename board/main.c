@@ -134,6 +134,7 @@ bool is_car_safety_mode_escc(uint16_t mode) {
 
 #define CAN_ESCC_INPUT  0x2AC
 #define CAN_ESCC_OUTPUT 0x2ABU
+#define CAN_ESCC_DIAG   0x2ADU
 
 void send_escc_msg(const ESCC_Msg *msg, const int bus_number) {
 #ifdef DEBUG
@@ -178,6 +179,85 @@ void send_escc_msg(const ESCC_Msg *msg, const int bus_number) {
   can_set_checksum(&to_send);
   can_send(&to_send, bus_number, true);
 }
+
+#ifdef ESCC_DIAG
+static uint16_t escc_diag_sat_u16(uint32_t value) {
+  return value > UINT16_MAX ? UINT16_MAX : (uint16_t)value;
+}
+
+static uint8_t escc_diag_sat_u8(uint32_t value) {
+  return value > UINT8_MAX ? UINT8_MAX : (uint8_t)value;
+}
+
+static void escc_diag_put_u16(uint8_t *dat, uint8_t offset, uint32_t value) {
+  const uint16_t clipped = escc_diag_sat_u16(value);
+  dat[offset] = clipped & 0xFFU;
+  dat[offset + 1U] = (clipped >> 8U) & 0xFFU;
+}
+
+static void send_escc_diag_msg(void) {
+  static uint8_t page = 0U;
+  static uint8_t rolling_counter = 0U;
+  uint8_t dat[8] = {0};
+
+  dat[0] = page;
+  switch (page) {
+    case 0U:
+      escc_diag_put_u16(dat, 1U, escc_diag_counters.car_to_radar_forwarded);
+      escc_diag_put_u16(dat, 3U, escc_diag_counters.radar_to_car_forwarded);
+      escc_diag_put_u16(dat, 5U, escc_diag_counters.scc_blocked_car_to_radar);
+      dat[7] = rolling_counter;
+      break;
+    case 1U:
+      escc_diag_put_u16(dat, 1U, escc_diag_counters.scc_blocked_radar_to_car);
+      escc_diag_put_u16(dat, 3U, escc_diag_counters.queue_pressure_drops);
+      escc_diag_put_u16(dat, 5U, escc_diag_counters.canfd_frames_dropped);
+      dat[7] = rolling_counter;
+      break;
+    case 2U:
+      escc_diag_put_u16(dat, 1U, escc_diag_counters.non_scc_car_to_radar_frames);
+      escc_diag_put_u16(dat, 3U, escc_diag_counters.fca11_fail_frames_bus2);
+      dat[5] = escc_diag_sat_u8(can_slots_empty(can_queues[RADAR_BUS]));
+      dat[6] = escc_diag_sat_u8(can_health[CAN_NUM_FROM_BUS_NUM(RADAR_BUS)].transmit_error_cnt);
+      dat[7] = rolling_counter;
+      break;
+    default:
+      dat[1] = CAN_NUM_FROM_BUS_NUM(CAR_BUS);
+      dat[2] = CAN_NUM_FROM_BUS_NUM(1U);
+      dat[3] = CAN_NUM_FROM_BUS_NUM(RADAR_BUS);
+      dat[4] = harness.status;
+#ifdef STM32H7
+      {
+        const uint8_t car_can_num = CAN_NUM_FROM_BUS_NUM(CAR_BUS);
+        const uint8_t radar_can_num = CAN_NUM_FROM_BUS_NUM(RADAR_BUS);
+        const FDCAN_GlobalTypeDef *car_fdcan = CANIF_FROM_CAN_NUM(car_can_num);
+        const FDCAN_GlobalTypeDef *radar_fdcan = CANIF_FROM_CAN_NUM(radar_can_num);
+        dat[5] = ((radar_fdcan->CCCR & FDCAN_CCCR_DAR) != 0U) ? 1U : 0U;
+        dat[5] |= ((radar_fdcan->CCCR & FDCAN_CCCR_FDOE) != 0U) ? 2U : 0U;
+        dat[5] |= ((radar_fdcan->CCCR & FDCAN_CCCR_BRSE) != 0U) ? 4U : 0U;
+        dat[5] |= ((car_fdcan->CCCR & FDCAN_CCCR_FDOE) != 0U) ? 8U : 0U;
+        dat[5] |= ((car_fdcan->CCCR & FDCAN_CCCR_BRSE) != 0U) ? 16U : 0U;
+        dat[7] = escc_diag_sat_u8(can_health[radar_can_num].transmit_error_cnt);
+      }
+#endif
+      dat[6] = escc_diag_sat_u8(can_slots_empty(can_queues[RADAR_BUS]));
+      break;
+  }
+
+  CANPacket_t to_send;
+  to_send.extended = CAN_ESCC_DIAG >= 0x800U ? 1U : 0U;
+  to_send.addr = CAN_ESCC_DIAG;
+  to_send.bus = CAR_BUS;
+  to_send.data_len_code = sizeof(dat);
+  (void)memcpy(to_send.data, dat, sizeof(dat));
+
+  can_set_checksum(&to_send);
+  can_send(&to_send, CAR_BUS, true);
+
+  rolling_counter += 1U;
+  page = (page + 1U) & 0x3U;
+}
+#endif
 #endif
 
 // ***************************** main code *****************************
@@ -215,6 +295,10 @@ static void tick_handler(void) {
     harness_tick();
     simple_watchdog_kick();
     sound_tick();
+
+#ifdef ESCC_DIAG
+    send_escc_diag_msg();
+#endif
 
     // re-init everything that uses harness status
     if (harness.status != prev_harness_status) {

@@ -2,9 +2,12 @@
 import argparse
 import csv
 import json
+import select
 import subprocess
 import sys
+import termios
 import time
+import tty
 from collections import defaultdict
 from pathlib import Path
 
@@ -136,13 +139,18 @@ def now_fields(start_mono: int) -> tuple[int, float]:
 
 
 def decode_fca11(dat: bytes) -> dict:
-  if len(dat) < 4:
+  if len(dat) < 8:
     return {"decode_error": f"short_frame_{len(dat)}"}
   return {
     "cf_vsm_warn_fca11": (dat[0] >> 3) & 0x3,
     "cr_vsm_deccmd_fca11": dat[1],
+    "fca_status": (dat[2] >> 2) & 0x3,
     "fca_cmd_act": (dat[2] >> 4) & 0x1,
+    "fca_stop_req": (dat[2] >> 5) & 0x1,
+    "fca_drv_set_status": (dat[2] >> 6) | ((dat[3] & 0x1) << 2),
     "cf_vsm_deccmdact_fca11": (dat[3] >> 7) & 0x1,
+    "fca_failinfo": dat[4] & 0x7,
+    "cr_fca_alive": (dat[4] >> 3) & 0xF,
   }
 
 
@@ -156,12 +164,16 @@ def decode_fca12(dat: bytes) -> dict:
 
 
 def decode_scc12(dat: bytes) -> dict:
-  if len(dat) < 7:
+  if len(dat) < 8:
     return {"decode_error": f"short_frame_{len(dat)}"}
   return {
     "cf_vsm_warn_scc12": (dat[0] >> 4) & 0x3,
     "cf_vsm_deccmdact_scc12": (dat[0] >> 1) & 0x1,
+    "acc_failinfo": (dat[1] >> 3) & 0x3,
+    "acc_mode": (dat[1] >> 5) & 0x3,
     "cr_vsm_deccmd_scc12": dat[2],
+    "aeb_failinfo": (dat[6] >> 2) & 0x3,
+    "aeb_status": (dat[6] >> 4) & 0x3,
     "aeb_cmd_act": (dat[6] >> 6) & 0x1,
   }
 
@@ -197,6 +209,7 @@ def active_escc_warning_or_actuation(fields: dict) -> bool:
     or fields.get("cf_vsm_deccmdact_fca11")
     or fields.get("cr_vsm_deccmd_scc12")
     or fields.get("cr_vsm_deccmd_fca11")
+    or fields.get("cf_vsm_warn_fca11")
     or fields.get("cf_vsm_warn_scc12")
   )
 
@@ -233,12 +246,15 @@ def main() -> int:
   parser.add_argument("--gap", type=float, default=0.25, help="tag watched-message gaps longer than this many seconds")
   parser.add_argument("--debounce", type=float, default=1.0, help="minimum seconds between duplicate event tags")
   parser.add_argument("--force-classic-can", action="store_true", help="set CAN-FD data speed low on buses 0 and 2 before capture")
+  parser.add_argument("--no-keyboard-markers", action="store_true", help="disable spacebar manual FCA chime markers")
+  parser.add_argument("--manual-marker-debounce", type=float, default=0.2, help="minimum seconds between spacebar manual markers")
   args = parser.parse_args()
 
   start_wall_ns = time.time_ns()
   start_mono_ns = time.monotonic_ns()
   capture_dir = Path(args.out).expanduser() / time.strftime("%Y%m%d-%H%M%S")
   capture_dir.mkdir(parents=True, exist_ok=False)
+  keyboard_markers_enabled = sys.stdin.isatty() and not args.no_keyboard_markers
 
   panda = Panda(serial=args.serial, cli=(args.serial is None))
   if args.force_classic_can:
@@ -253,6 +269,8 @@ def main() -> int:
     "panda_usb_serial": panda.get_usb_serial(),
     "panda_version": panda.get_version(),
     "force_classic_can": args.force_classic_can,
+    "keyboard_markers_enabled": keyboard_markers_enabled,
+    "manual_marker_debounce_s": args.manual_marker_debounce,
     "git": git_info(),
   }
   (capture_dir / "meta.json").write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
@@ -279,8 +297,11 @@ def main() -> int:
   last_physical_car_scc = -1e9
   last_health_time = -1e9
   last_status_print = -1e9
+  last_manual_marker = -1e9
   prev_global_health = None
   prev_can_health = None
+  stdin_fd = sys.stdin.fileno() if keyboard_markers_enabled else None
+  old_terminal_attrs = termios.tcgetattr(stdin_fd) if stdin_fd is not None else None
 
   def tag(
     event: str,
@@ -306,15 +327,48 @@ def main() -> int:
     event_counts[event] += 1
     print(f"\n[{mono_s:9.3f}s] {event} {addr_hex} {event_details(details)}")
 
+  def manual_marker(mono_s: float) -> None:
+    unix_ns = time.time_ns()
+    details = {"key": "space", "meaning": "heard_fca_chime"}
+    events_writer.writerow([unix_ns, f"{mono_s:.6f}", "manual_fca_chime", "keyboard", "", 0, 0, "", "", "", event_details(details)])
+    events_f.flush()
+    event_counts["manual_fca_chime"] += 1
+    print(f"\n[{mono_s:9.3f}s] manual_fca_chime {event_details(details)}")
+
+  def poll_keyboard_markers(mono_s: float) -> None:
+    nonlocal last_manual_marker
+    if stdin_fd is None:
+      return
+
+    while True:
+      readable, _, _ = select.select([sys.stdin], [], [], 0)
+      if not readable:
+        return
+
+      char = sys.stdin.read(1)
+      if char == "":
+        return
+      if char == " " and mono_s - last_manual_marker >= args.manual_marker_debounce:
+        last_manual_marker = mono_s
+        manual_marker(mono_s)
+
   print(f"Logging to {capture_dir}")
-  print("Automatic tags: FCA/SCC/ESCC warning fields, watched-message gaps, SCC forwarding during the block window, and panda/CAN health changes.")
+  print("Automatic tags: FCA/SCC fail fields, ESCC AEB fields, watched-message gaps, SCC forwarding during the block window, and panda/CAN health changes.")
+  if keyboard_markers_enabled:
+    print("Manual marker: tap SPACE whenever you hear the FCA chime; events.csv will include manual_fca_chime rows.")
+  else:
+    print("Manual marker: disabled because stdin is not an interactive terminal or --no-keyboard-markers was set.")
   print("Leave this running while you drive; stop with Ctrl-C after parking.")
 
   try:
+    if stdin_fd is not None:
+      tty.setcbreak(stdin_fd)
+
     while True:
       messages = panda.can_recv()
       unix_ns = time.time_ns()
       mono_s = (time.monotonic_ns() - start_mono_ns) / 1e9
+      poll_keyboard_markers(mono_s)
 
       for addr, dat, src in messages:
         bus, returned, rejected = decode_src(src)
@@ -364,6 +418,8 @@ def main() -> int:
               key=(*status_key, last_status[status_key], status),
             )
           last_status[status_key] = status
+          if fields.get("fca_failinfo"):
+            tag("fca11_failinfo_fields", mono_s, src, bus, returned, rejected, addr, dat, fields, key=("fca11_failinfo_fields", bus, returned))
           if active_fca11_actuation(fields):
             tag("fca11_actuation_fields", mono_s, src, bus, returned, rejected, addr, dat, fields, key=("fca11_actuation_fields", bus, returned))
 
@@ -405,6 +461,8 @@ def main() -> int:
               key=(*status_key, last_status[status_key], status),
             )
           last_status[status_key] = status
+          if fields.get("acc_failinfo") or fields.get("aeb_failinfo") or fields.get("aeb_status"):
+            tag("scc12_failinfo_fields", mono_s, src, bus, returned, rejected, addr, dat, fields, key=("scc12_failinfo_fields", bus, returned))
           if active_scc12_actuation(fields) or fields.get("cf_vsm_warn_scc12"):
             tag("scc12_warning_fields", mono_s, src, bus, returned, rejected, addr, dat, fields, key=("scc12_warning_fields", bus, returned))
 
@@ -428,6 +486,7 @@ def main() -> int:
               )
             last_status[status_key] = status
           if active_escc_warning_or_actuation(fields):
+            tag("escc_aeb_fields", mono_s, src, bus, returned, rejected, addr, dat, fields, key=("escc_aeb_fields", bus, returned))
             tag("escc_output_warning_fields", mono_s, src, bus, returned, rejected, addr, dat, fields, key=("escc_output_warning_fields", bus, returned))
 
         if addr in SCC_ADDRS and bus == CAR_BUS and not returned and not rejected:
@@ -446,6 +505,19 @@ def main() -> int:
             {"seconds_after_physical_car_scc": round(mono_s - last_physical_car_scc, 6)},
             key=("scc_forwarded_inside_block_window", addr),
           )
+          if mono_s >= 2.0:
+            tag(
+              "steady_state_scc_leak",
+              mono_s,
+              src,
+              bus,
+              returned,
+              rejected,
+              addr,
+              dat,
+              {"seconds_after_physical_car_scc": round(mono_s - last_physical_car_scc, 6), "steady_state_after_s": 2.0},
+              key=("steady_state_scc_leak", addr),
+            )
 
       if mono_s - last_health_time >= args.health_period:
         global_health, can_health = snapshot_health(panda)
@@ -472,6 +544,25 @@ def main() -> int:
                 changes[key] = {"old": old, "new": new}
             if changes:
               tag("can_health_change", mono_s, "health", bus, False, False, None, b"", changes, key=("can_health_change", bus, tuple(sorted(changes))))
+              if bus == RADAR_BUS:
+                deltas = {}
+                for key, change in changes.items():
+                  old = change["old"]
+                  new = change["new"]
+                  if isinstance(old, int) and isinstance(new, int) and new != old:
+                    deltas[key] = {"old": old, "new": new, "delta": new - old}
+                error_deltas = {key: value for key, value in deltas.items() if key in {
+                  "bus_off_cnt",
+                  "receive_error_cnt",
+                  "transmit_error_cnt",
+                  "total_error_cnt",
+                  "total_tx_lost_cnt",
+                  "total_rx_lost_cnt",
+                  "total_tx_checksum_error_cnt",
+                  "can_core_reset_count",
+                }}
+                if error_deltas:
+                  tag("bus2_error_delta", mono_s, "health", bus, False, False, None, b"", error_deltas, key=("bus2_error_delta", tuple(sorted(error_deltas))))
 
         prev_global_health = global_health
         prev_can_health = can_health
@@ -485,6 +576,8 @@ def main() -> int:
   except KeyboardInterrupt:
     print("\nStopping capture.")
   finally:
+    if stdin_fd is not None and old_terminal_attrs is not None:
+      termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_terminal_attrs)
     raw_f.close()
     events_f.close()
     health_f.close()

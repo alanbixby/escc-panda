@@ -254,6 +254,32 @@ void set_heartbeat_engaged_mads(bool c){
   heartbeat_engaged_mads = c;
 }
 
+#ifdef ESCC_DIAG
+uint32_t get_escc_diag_car_to_radar_forwarded(void) {
+  return escc_diag_counters.car_to_radar_forwarded;
+}
+
+uint32_t get_escc_diag_radar_to_car_forwarded(void) {
+  return escc_diag_counters.radar_to_car_forwarded;
+}
+
+uint32_t get_escc_diag_scc_blocked_car_to_radar(void) {
+  return escc_diag_counters.scc_blocked_car_to_radar;
+}
+
+uint32_t get_escc_diag_scc_blocked_radar_to_car(void) {
+  return escc_diag_counters.scc_blocked_radar_to_car;
+}
+
+uint32_t get_escc_diag_queue_pressure_drops(void) {
+  return escc_diag_counters.queue_pressure_drops;
+}
+
+uint32_t get_escc_diag_non_scc_car_to_radar_frames(void) {
+  return escc_diag_counters.non_scc_car_to_radar_frames;
+}
+#endif
+
 //int get_temp_debug(void){
 //  return temp_debug;
 //}

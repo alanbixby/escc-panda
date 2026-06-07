@@ -200,6 +200,9 @@ void can_rx(uint8_t can_number) {
 
 #ifdef ESCC
     if (canfd_frame) {
+#ifdef ESCC_DIAG
+      escc_diag_counters.canfd_frames_dropped += 1U;
+#endif
       FDCANx->RXF0A = rx_fifo_idx;
       continue;
     }

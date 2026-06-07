@@ -314,6 +314,12 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
     while self.safety.can_slots_empty(self.safety.tx3_q) > empty_slots:
       self.assertTrue(self.safety.can_push(self.safety.tx3_q, msg))
 
+  def _require_escc_diag(self):
+    try:
+      self.safety.get_escc_diag_car_to_radar_forwarded()
+    except AttributeError as exc:
+      raise unittest.SkipTest("ESCC_DIAG is not compiled into libpanda") from exc
+
   def test_car_to_radar_forwards_when_radar_queue_has_space(self):
     self.assertGreaterEqual(self.safety.can_slots_empty(self.safety.tx3_q), self.RADAR_TX_QUEUE_MIN_SLOTS)
     self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
@@ -356,6 +362,40 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
     self.safety.set_timer(151001)
 
     self.assertEqual(0, self.safety.safety_fwd_hook(2, 0x420))
+
+  def test_escc_diag_counts_car_to_radar_forwarding(self):
+    self._require_escc_diag()
+
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+    self.assertEqual(1, self.safety.get_escc_diag_car_to_radar_forwarded())
+    self.assertEqual(1, self.safety.get_escc_diag_non_scc_car_to_radar_frames())
+
+  def test_escc_diag_counts_radar_to_car_forwarding_independent_of_radar_queue(self):
+    self._require_escc_diag()
+    self._fill_radar_tx_queue_to_empty_slots(self.RADAR_TX_QUEUE_MIN_SLOTS - 1)
+
+    self.assertEqual(0, self.safety.safety_fwd_hook(2, self.NON_SCC_ADDR))
+
+    self.assertEqual(1, self.safety.get_escc_diag_radar_to_car_forwarded())
+
+  def test_escc_diag_counts_queue_pressure_drops(self):
+    self._require_escc_diag()
+    self._fill_radar_tx_queue_to_empty_slots(self.RADAR_TX_QUEUE_MIN_SLOTS - 1)
+
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+    self.assertEqual(1, self.safety.get_escc_diag_queue_pressure_drops())
+
+  def test_escc_diag_counts_scc_block_directions(self):
+    self._require_escc_diag()
+
+    self.safety.set_timer(1000)
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, 0x420))
+    self.assertEqual(-1, self.safety.safety_fwd_hook(2, 0x420))
+
+    self.assertEqual(1, self.safety.get_escc_diag_scc_blocked_car_to_radar())
+    self.assertEqual(1, self.safety.get_escc_diag_scc_blocked_radar_to_car())
 
 
 if __name__ == "__main__":
