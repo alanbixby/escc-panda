@@ -291,6 +291,7 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
   TX_MSGS = []
   RADAR_TX_QUEUE_MIN_SLOTS = 50
   NON_SCC_ADDR = 0x123
+  SHAPED_KEEPALIVE_ADDR = 0x260
   SCC_ADDRS = (0x420, 0x421, 0x50A, 0x389)
 
   def setUp(self):
@@ -320,9 +321,21 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
     except AttributeError as exc:
       raise unittest.SkipTest("ESCC_DIAG is not compiled into libpanda") from exc
 
+  def _escc_diag_traffic_shape_enabled(self):
+    try:
+      return self.safety.get_escc_diag_traffic_shape_enabled()
+    except AttributeError:
+      return False
+
   def test_car_to_radar_forwards_when_radar_queue_has_space(self):
     self.assertGreaterEqual(self.safety.can_slots_empty(self.safety.tx3_q), self.RADAR_TX_QUEUE_MIN_SLOTS)
-    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+    expected_bus = -1 if self._escc_diag_traffic_shape_enabled() else 2
+    self.assertEqual(expected_bus, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+  def test_car_to_radar_traffic_shape_allows_keepalive(self):
+    self._require_escc_diag()
+    self.assertGreaterEqual(self.safety.can_slots_empty(self.safety.tx3_q), self.RADAR_TX_QUEUE_MIN_SLOTS)
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.SHAPED_KEEPALIVE_ADDR))
 
   def test_car_to_radar_drops_when_radar_queue_below_threshold(self):
     self._fill_radar_tx_queue_to_empty_slots(self.RADAR_TX_QUEUE_MIN_SLOTS - 1)
@@ -331,6 +344,9 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
     self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
 
   def test_car_to_radar_threshold_boundary(self):
+    if self._escc_diag_traffic_shape_enabled():
+      raise unittest.SkipTest("ESCC_DIAG_TRAFFIC_SHAPE intentionally drops non-whitelisted car-to-radar frames")
+
     self._fill_radar_tx_queue_to_empty_slots(self.RADAR_TX_QUEUE_MIN_SLOTS)
     self.assertEqual(self.RADAR_TX_QUEUE_MIN_SLOTS, self.safety.can_slots_empty(self.safety.tx3_q))
     self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
@@ -366,10 +382,20 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
   def test_escc_diag_counts_car_to_radar_forwarding(self):
     self._require_escc_diag()
 
-    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+    addr = self.SHAPED_KEEPALIVE_ADDR if self._escc_diag_traffic_shape_enabled() else self.NON_SCC_ADDR
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, addr))
 
     self.assertEqual(1, self.safety.get_escc_diag_car_to_radar_forwarded())
     self.assertEqual(1, self.safety.get_escc_diag_non_scc_car_to_radar_frames())
+
+  def test_escc_diag_traffic_shape_drops_unlisted_car_to_radar_frame(self):
+    if not self._escc_diag_traffic_shape_enabled():
+      raise unittest.SkipTest("ESCC_DIAG_TRAFFIC_SHAPE is not compiled into libpanda")
+
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+    self.assertEqual(0, self.safety.get_escc_diag_car_to_radar_forwarded())
+    self.assertEqual(0, self.safety.get_escc_diag_non_scc_car_to_radar_frames())
 
   def test_escc_diag_counts_radar_to_car_forwarding_independent_of_radar_queue(self):
     self._require_escc_diag()

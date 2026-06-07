@@ -76,6 +76,7 @@ def setup_safety_helpers(ffi):
   uint32_t get_escc_diag_scc_blocked_radar_to_car(void);
   uint32_t get_escc_diag_queue_pressure_drops(void);
   uint32_t get_escc_diag_non_scc_car_to_radar_frames(void);
+  bool get_escc_diag_traffic_shape_enabled(void);
   """)
 
 class PandaSafety(Protocol):

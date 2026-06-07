@@ -160,6 +160,7 @@ def decode_escc_diag(dat: bytes) -> dict[str, int | str]:
       "radar_bus_brse": (dat[5] >> 2) & 0x1,
       "car_bus_fdoe": (dat[5] >> 3) & 0x1,
       "car_bus_brse": (dat[5] >> 4) & 0x1,
+      "traffic_shape_enabled": (dat[5] >> 5) & 0x1,
       "bus2_tx_queue_free_slots": dat[6],
       "bus2_transmit_error_cnt": dat[7],
     }
@@ -518,6 +519,7 @@ def analyze_capture(capture_dir: Path, pre_window_s: float = 2.0, fail_gap_s: fl
     "fail_frame_count": len(fail_frames),
     "classifications": dict(Counter(window.classification for window in fail_windows)),
     "diag_pages_seen": sorted(diag_pages),
+    "traffic_shape_enabled": bool(diag_pages.get(3, {}).get("traffic_shape_enabled", 0)),
     "manual_chime_count": sum(1 for event in logger_events if event[1] == "manual_fca_chime"),
   }
   return CaptureAnalysis(
@@ -540,7 +542,11 @@ def print_text(analyses: list[CaptureAnalysis]) -> None:
   for analysis in analyses:
     print(f"\n{analysis.capture}")
     manual_chimes = analysis.summary.get("manual_chime_count", 0)
-    print(f"  duration={analysis.duration_s:.3f}s frames={analysis.frames} fail_windows={len(analysis.fail_windows)} manual_chimes={manual_chimes}")
+    traffic_shape = analysis.summary.get("traffic_shape_enabled", False)
+    print(
+      f"  duration={analysis.duration_s:.3f}s frames={analysis.frames} "
+      + f"fail_windows={len(analysis.fail_windows)} manual_chimes={manual_chimes} traffic_shape={traffic_shape}"
+    )
     if not analysis.fail_windows:
       print("  no physical bus-2 FCA11.FCA_Failinfo windows")
       continue

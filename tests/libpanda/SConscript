@@ -46,6 +46,8 @@ if os.getenv("ESCC") or os.getenv("ESCC_DIAG"):
   env['CFLAGS'] += ["-DESCC"]
 if os.getenv("ESCC_DIAG"):
   env['CFLAGS'] += ["-DESCC_DIAG"]
+if os.getenv("ESCC_DIAG_TRAFFIC_SHAPE"):
+  env['CFLAGS'] += ["-DESCC_DIAG_TRAFFIC_SHAPE"]
 
 panda = env.SharedObject("panda.os", "panda.c")
 libpanda = env.SharedLibrary("libpanda.so", [panda])

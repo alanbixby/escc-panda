@@ -278,6 +278,10 @@ uint32_t get_escc_diag_queue_pressure_drops(void) {
 uint32_t get_escc_diag_non_scc_car_to_radar_frames(void) {
   return escc_diag_counters.non_scc_car_to_radar_frames;
 }
+
+bool get_escc_diag_traffic_shape_enabled(void) {
+  return ESCC_DIAG_TRAFFIC_SHAPE_ENABLED;
+}
 #endif
 
 //int get_temp_debug(void){

@@ -16,6 +16,12 @@ uint32_t sunnypilot_detected_last = 0;
 ESCC_Msg escc = {0};
 
 #ifdef ESCC_DIAG
+#ifdef ESCC_DIAG_TRAFFIC_SHAPE
+#define ESCC_DIAG_TRAFFIC_SHAPE_ENABLED true
+#else
+#define ESCC_DIAG_TRAFFIC_SHAPE_ENABLED false
+#endif
+
 typedef struct {
   uint32_t car_to_radar_forwarded;
   uint32_t radar_to_car_forwarded;
@@ -31,6 +37,17 @@ ESCC_DiagCounters escc_diag_counters = {0};
 
 static void escc_diag_reset(void) {
   escc_diag_counters = (ESCC_DiagCounters){0};
+}
+#endif
+
+#if defined(ESCC_DIAG_TRAFFIC_SHAPE) && !defined(ESCC_DIAG)
+#error "ESCC_DIAG_TRAFFIC_SHAPE requires ESCC_DIAG"
+#endif
+
+#ifdef ESCC_DIAG_TRAFFIC_SHAPE
+static bool escc_diag_car_to_radar_shape_allowed(const int addr) {
+  const bool is_scc_msg = addr == 0x420 || addr == 0x421 || addr == 0x50A || addr == 0x389;
+  return is_scc_msg || addr == 0x260 || addr == 0x2B0 || addr == 0x371 || addr == 0x386 || addr == 0x394;
 }
 #endif
 
@@ -128,7 +145,12 @@ static int escc_fwd_hook(const int bus_src, const int addr) {
   int bus_dst = DEVNULL_BUS;
   if (bus_src == CAR_BUS) {
     const bool radar_queue_has_space = can_slots_empty(can_queues[RADAR_BUS]) >= RADAR_TX_QUEUE_MIN_SLOTS;
+#ifdef ESCC_DIAG_TRAFFIC_SHAPE
+    const bool radar_shape_allowed = escc_diag_car_to_radar_shape_allowed(addr);
+    bus_dst = (radar_queue_has_space && radar_shape_allowed) ? RADAR_BUS : DEVNULL_BUS;
+#else
     bus_dst = radar_queue_has_space ? RADAR_BUS : DEVNULL_BUS;
+#endif
 #ifdef ESCC_DIAG
     if (!radar_queue_has_space) {
       escc_diag_counters.queue_pressure_drops += 1U;

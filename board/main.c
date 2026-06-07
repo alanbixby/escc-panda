@@ -237,6 +237,9 @@ static void send_escc_diag_msg(void) {
         dat[5] |= ((radar_fdcan->CCCR & FDCAN_CCCR_BRSE) != 0U) ? 4U : 0U;
         dat[5] |= ((car_fdcan->CCCR & FDCAN_CCCR_FDOE) != 0U) ? 8U : 0U;
         dat[5] |= ((car_fdcan->CCCR & FDCAN_CCCR_BRSE) != 0U) ? 16U : 0U;
+#ifdef ESCC_DIAG_TRAFFIC_SHAPE
+        dat[5] |= 32U;
+#endif
         dat[7] = escc_diag_sat_u8(can_health[radar_can_num].transmit_error_cnt);
       }
 #endif
