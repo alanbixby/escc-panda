@@ -47,7 +47,17 @@ static void escc_diag_reset(void) {
 #ifdef ESCC_DIAG_TRAFFIC_SHAPE
 static bool escc_diag_car_to_radar_shape_allowed(const int addr) {
   const bool is_scc_msg = addr == 0x420 || addr == 0x421 || addr == 0x50A || addr == 0x389;
-  return is_scc_msg || addr == 0x260 || addr == 0x2B0 || addr == 0x371 || addr == 0x386 || addr == 0x394;
+  // Diagnostic B2 profile: keep the high-rate car context seen by the radar in
+  // the A baseline while dropping lower-rate bulk traffic from the radar spur.
+  return is_scc_msg
+      || addr == 0x130 || addr == 0x140 || addr == 0x153 || addr == 0x160
+      || addr == 0x164 || addr == 0x220 || addr == 0x240 || addr == 0x251
+      || addr == 0x260 || addr == 0x2B0 || addr == 0x2F5 || addr == 0x340
+      || addr == 0x361 || addr == 0x371 || addr == 0x372 || addr == 0x381
+      || addr == 0x386 || addr == 0x387 || addr == 0x38C || addr == 0x390
+      || addr == 0x391 || addr == 0x394 || addr == 0x436 || addr == 0x470
+      || addr == 0x472 || addr == 0x47F || addr == 0x48A || addr == 0x4F1
+      || addr == 0x58B;
 }
 #endif
 
