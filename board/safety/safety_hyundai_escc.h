@@ -47,7 +47,27 @@ static void escc_diag_reset(void) {
 #ifdef ESCC_DIAG_TRAFFIC_SHAPE
 static bool escc_diag_car_to_radar_shape_allowed(const int addr) {
   const bool is_scc_msg = addr == 0x420 || addr == 0x421 || addr == 0x50A || addr == 0x389;
-  return is_scc_msg || addr == 0x260 || addr == 0x2B0 || addr == 0x371 || addr == 0x386 || addr == 0x394;
+  // Diagnostic C profile: keep low load, but add ADAS/FCA context that can
+  // affect dashboard AEB/FCA availability. This is intentionally not a
+  // production filtering policy.
+  return is_scc_msg
+      || addr == 0x220  // ESP12
+      || addr == 0x260  // EMS16, if present on this car
+      || addr == 0x2B0  // SAS11
+      || addr == 0x340  // LKAS11
+      || addr == 0x371  // E_EMS11
+      || addr == 0x386  // WHL_SPD11
+      || addr == 0x391  // BCM_PO_11
+      || addr == 0x394  // TCS13
+      || addr == 0x47F  // ESP11
+      || addr == 0x484  // HDA11_MFC
+      || addr == 0x485  // LFAHDA_MFC
+      || addr == 0x490  // EPB11
+      || addr == 0x4A7  // MFC_4a7
+      || addr == 0x4F1  // CLU11
+      || addr == 0x500  // ACU14
+      || addr == 0x52A  // CLU15
+      || addr == 0x53E; // LKAS12
 }
 #endif
 
