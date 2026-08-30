@@ -290,7 +290,9 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
   SAFETY_HYUNDAI_ESCC = 29
   TX_MSGS = []
   RADAR_TX_QUEUE_MIN_SLOTS = 50
+  RADAR_LINK_TIMEOUT_US = 200000
   NON_SCC_ADDR = 0x123
+  RADAR_AUX_ADDR = 0x4A2
   SCC_ADDRS = (0x420, 0x421, 0x50A, 0x389)
 
   def setUp(self):
@@ -320,17 +322,50 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
     except AttributeError as exc:
       raise unittest.SkipTest("ESCC_DIAG is not compiled into libpanda") from exc
 
+  def _mark_radar_alive(self):
+    self.safety.safety_rx_hook(common.make_msg(2, self.RADAR_AUX_ADDR, 8))
+
   def test_car_to_radar_forwards_when_radar_queue_has_space(self):
+    self._mark_radar_alive()
     self.assertGreaterEqual(self.safety.can_slots_empty(self.safety.tx3_q), self.RADAR_TX_QUEUE_MIN_SLOTS)
     self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
 
+  def test_car_to_radar_blocked_until_radar_seen(self):
+    self.assertGreaterEqual(self.safety.can_slots_empty(self.safety.tx3_q), self.RADAR_TX_QUEUE_MIN_SLOTS)
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+    self._mark_radar_alive()
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+  def test_car_to_radar_stops_after_radar_link_timeout(self):
+    self._mark_radar_alive()
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+    self.safety.set_timer(self.RADAR_LINK_TIMEOUT_US)
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+    self.safety.set_timer(self.RADAR_LINK_TIMEOUT_US + 1)
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+    # radar->car direction is never gated
+    self.assertEqual(0, self.safety.safety_fwd_hook(2, self.NON_SCC_ADDR))
+
+  def test_radar_link_reopens_on_radar_rx(self):
+    self._mark_radar_alive()
+    self.safety.set_timer(self.RADAR_LINK_TIMEOUT_US + 1)
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+    self._mark_radar_alive()
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
   def test_car_to_radar_drops_when_radar_queue_below_threshold(self):
+    self._mark_radar_alive()
     self._fill_radar_tx_queue_to_empty_slots(self.RADAR_TX_QUEUE_MIN_SLOTS - 1)
 
     self.assertEqual(self.RADAR_TX_QUEUE_MIN_SLOTS - 1, self.safety.can_slots_empty(self.safety.tx3_q))
     self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
 
   def test_car_to_radar_threshold_boundary(self):
+    self._mark_radar_alive()
     self._fill_radar_tx_queue_to_empty_slots(self.RADAR_TX_QUEUE_MIN_SLOTS)
     self.assertEqual(self.RADAR_TX_QUEUE_MIN_SLOTS, self.safety.can_slots_empty(self.safety.tx3_q))
     self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
@@ -349,6 +384,7 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
 
   def test_sunnypilot_scc_block_preserved(self):
     self.safety.set_timer(1000)
+    self._mark_radar_alive()
     self.assertEqual(-1, self.safety.safety_fwd_hook(0, 0x420))
 
     for addr in self.SCC_ADDRS:
@@ -365,6 +401,7 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
 
   def test_escc_diag_counts_car_to_radar_forwarding(self):
     self._require_escc_diag()
+    self._mark_radar_alive()
 
     self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
 
@@ -381,6 +418,7 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
 
   def test_escc_diag_counts_queue_pressure_drops(self):
     self._require_escc_diag()
+    self._mark_radar_alive()
     self._fill_radar_tx_queue_to_empty_slots(self.RADAR_TX_QUEUE_MIN_SLOTS - 1)
 
     self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
@@ -391,6 +429,7 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
     self._require_escc_diag()
 
     self.safety.set_timer(1000)
+    self._mark_radar_alive()
     self.assertEqual(-1, self.safety.safety_fwd_hook(0, 0x420))
     self.assertEqual(-1, self.safety.safety_fwd_hook(2, 0x420))
 

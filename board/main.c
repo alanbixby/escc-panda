@@ -237,6 +237,7 @@ static void send_escc_diag_msg(void) {
         dat[5] |= ((radar_fdcan->CCCR & FDCAN_CCCR_BRSE) != 0U) ? 4U : 0U;
         dat[5] |= ((car_fdcan->CCCR & FDCAN_CCCR_FDOE) != 0U) ? 8U : 0U;
         dat[5] |= ((car_fdcan->CCCR & FDCAN_CCCR_BRSE) != 0U) ? 16U : 0U;
+        dat[5] |= escc_radar_link_active ? 64U : 0U;
         dat[7] = escc_diag_sat_u8(can_health[radar_can_num].transmit_error_cnt);
       }
 #endif
@@ -298,6 +299,24 @@ static void tick_handler(void) {
 
 #ifdef ESCC_DIAG
     send_escc_diag_msg();
+#endif
+
+#if defined(ESCC) && defined(STM32H7)
+    // With the radar asleep nothing ACKs the spur, so a queued frame would retry
+    // until the error-passive reset path fires. Once the link gate closes, drop
+    // whatever is still queued or in the TX FIFO and leave the bus quiet.
+    if (!escc_radar_link_active) {
+      const uint8_t radar_can_num = CAN_NUM_FROM_BUS_NUM(RADAR_BUS);
+      FDCAN_GlobalTypeDef *radar_fdcan = CANIF_FROM_CAN_NUM(radar_can_num);
+      const bool tx_fifo_busy = (radar_fdcan->TXFQS & FDCAN_TXFQS_TFQF) != 0U ||
+                                ((radar_fdcan->TXFQS & FDCAN_TXFQS_TFFL) < FDCAN_TX_FIFO_EL_CNT);
+      if (can_slots_empty(can_queues[RADAR_BUS]) < can_queues[RADAR_BUS]->fifo_size - 1U) {
+        can_clear(can_queues[RADAR_BUS]);
+      }
+      if (tx_fifo_busy) {
+        can_clear_send(radar_fdcan, radar_can_num);
+      }
+    }
 #endif
 
     // re-init everything that uses harness status

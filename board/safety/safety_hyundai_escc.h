@@ -5,12 +5,18 @@
 #define DEVNULL_BUS (-1)
 #define CAR_BUS 0
 #define RADAR_BUS 2
-// Secondary backstop for radar isolation. FDCAN3 DAR is the primary protection
-// against a stuck TX FIFO; this keeps CAR->RADAR forwarding from exhausting tx3_q.
+// Backstop so CAR->RADAR forwarding can't exhaust tx3_q if the spur drains slowly.
 #define RADAR_TX_QUEUE_MIN_SLOTS 50U
+// The radar broadcasts SCC11/SCC12/SCC14/FCA11 at 50Hz whenever it is awake, so
+// 200ms of bus-2 silence means the spur has no ACKing node. Forwarding into a
+// dead spur pins the TX FIFO and churns the error-passive reset path.
+#define RADAR_LINK_TIMEOUT_US 200000U
 
 bool scc_block_allowed = false;
 uint32_t sunnypilot_detected_last = 0;
+uint32_t escc_radar_last_seen = 0;
+bool escc_radar_seen = false;
+bool escc_radar_link_active = false;
 
 // Initialize bytes to send to 2AB
 ESCC_Msg escc = {0};
@@ -37,6 +43,9 @@ static void escc_diag_reset(void) {
 static safety_config escc_init(uint16_t param) {
   scc_block_allowed = false;
   sunnypilot_detected_last = 0U;
+  escc_radar_last_seen = 0U;
+  escc_radar_seen = false;
+  escc_radar_link_active = false;
 #ifdef ESCC_DIAG
   escc_diag_reset();
 #endif
@@ -47,7 +56,11 @@ static safety_config escc_init(uint16_t param) {
 static void escc_rx_hook(const CANPacket_t* to_push) {
   const int bus = GET_BUS(to_push);
   const int addr = GET_ADDR(to_push);
-  
+
+  if (bus == RADAR_BUS) {
+    escc_radar_last_seen = MICROSECOND_TIMER->CNT;
+    escc_radar_seen = true;
+  }
 
   const int is_scc_msg = addr == 0x420 || addr == 0x421 || addr == 0x50A || addr == 0x389;
   const int is_fca_msg = addr == 0x38D || addr == 0x483;
@@ -125,12 +138,15 @@ static int escc_fwd_hook(const int bus_src, const int addr) {
   const uint32_t ts_elapsed = get_ts_elapsed(ts, sunnypilot_detected_last);
   scc_block_allowed = (ts_elapsed <= 150000);
 
+  // Forward onto the radar spur only while the radar itself is transmitting
+  escc_radar_link_active = escc_radar_seen && (get_ts_elapsed(ts, escc_radar_last_seen) <= RADAR_LINK_TIMEOUT_US);
+
   int bus_dst = DEVNULL_BUS;
   if (bus_src == CAR_BUS) {
     const bool radar_queue_has_space = can_slots_empty(can_queues[RADAR_BUS]) >= RADAR_TX_QUEUE_MIN_SLOTS;
-    bus_dst = radar_queue_has_space ? RADAR_BUS : DEVNULL_BUS;
+    bus_dst = (escc_radar_link_active && radar_queue_has_space) ? RADAR_BUS : DEVNULL_BUS;
 #ifdef ESCC_DIAG
-    if (!radar_queue_has_space) {
+    if (escc_radar_link_active && !radar_queue_has_space) {
       escc_diag_counters.queue_pressure_drops += 1U;
     }
 #endif
