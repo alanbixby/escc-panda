@@ -153,13 +153,11 @@ bool llcan_init(FDCAN_GlobalTypeDef *FDCANx) {
     // Enable config change
     FDCANx->CCCR |= FDCAN_CCCR_CCE;
     uint8_t bus_number = BUS_NUM_FROM_CAN_NUM(can_number);
-    // Disable automatic retransmission on the logical radar spur to prevent a
-    // missed ACK from pinning the single TX FIFO element and forcing core resets.
-    if (bus_number == 2U) {
-      FDCANx->CCCR |= FDCAN_CCCR_DAR;
-    } else {
-      FDCANx->CCCR &= ~(FDCAN_CCCR_DAR);
-    }
+    // Diagnostic E profile: automatic retransmission on all buses, including the
+    // radar spur. DAR discards frames on arbitration loss against radar TX, which
+    // the radar sees as input gaps (FCA_Failinfo/ACCFailInfo=3 blips). A stuck TX
+    // with no ACKing node falls back to the error-passive core reset path.
+    FDCANx->CCCR &= ~(FDCAN_CCCR_DAR);
     // Enable transmission pause feature
     FDCANx->CCCR |= FDCAN_CCCR_TXP;
     // Disable protocol exception handling
