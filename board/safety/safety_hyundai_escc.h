@@ -11,8 +11,10 @@
 // 200ms of bus-2 silence means the spur has no ACKing node. Forwarding into a
 // dead spur pins the TX FIFO and churns the error-passive reset path.
 #define RADAR_LINK_TIMEOUT_US 200000U
-// While the link is down, still let one car frame per second through as a wake
-// probe, in case the radar needs inbound bus activity before it starts talking.
+// Until the radar has been seen once this power cycle, let one car frame per
+// second through as a wake probe, in case the radar needs inbound bus activity
+// before it starts talking. After first contact the radar has proven it
+// transmits, so a later sleeping spur stays fully quiet.
 #define RADAR_PROBE_INTERVAL_US 1000000U
 
 bool scc_block_allowed = false;
@@ -21,6 +23,7 @@ uint32_t sunnypilot_detected_last = 0;
 uint32_t escc_radar_last_seen = 0;
 uint32_t escc_probe_last = 0;
 bool escc_radar_seen = false;
+bool escc_radar_ever_seen = false;
 bool escc_radar_link_active = false;
 
 // Initialize bytes to send to 2AB
@@ -52,6 +55,7 @@ static safety_config escc_init(uint16_t param) {
   escc_radar_last_seen = 0U;
   escc_probe_last = 0U;
   escc_radar_seen = false;
+  escc_radar_ever_seen = false;
   escc_radar_link_active = false;
 #ifdef ESCC_DIAG
   escc_diag_reset();
@@ -67,6 +71,7 @@ static void escc_rx_hook(const CANPacket_t* to_push) {
   if (bus == RADAR_BUS) {
     escc_radar_last_seen = MICROSECOND_TIMER->CNT;
     escc_radar_seen = true;
+    escc_radar_ever_seen = true;
   }
 
   const int is_scc_msg = addr == 0x420 || addr == 0x421 || addr == 0x50A || addr == 0x389;
@@ -152,6 +157,7 @@ static int escc_fwd_hook(const int bus_src, const int addr) {
   // given frame, so this opens the link on the radar's own first frame
   if (bus_src == RADAR_BUS) {
     escc_radar_seen = true;
+    escc_radar_ever_seen = true;
     escc_radar_last_seen = ts;
   }
   // Latch expiry (timer-alias immunity, same as above)
@@ -167,7 +173,7 @@ static int escc_fwd_hook(const int bus_src, const int addr) {
     // radar's broadcasts (comm control), and the tool's requests must get through
     const bool is_diag_addr = (addr >= 0x700) && (addr <= 0x7FF);
     bool link_pass = escc_radar_link_active || is_diag_addr;
-    if (!link_pass && (get_ts_elapsed(ts, escc_probe_last) >= RADAR_PROBE_INTERVAL_US)) {
+    if (!link_pass && !escc_radar_ever_seen && (get_ts_elapsed(ts, escc_probe_last) >= RADAR_PROBE_INTERVAL_US)) {
       escc_probe_last = ts;
       link_pass = true;
     }

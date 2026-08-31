@@ -375,6 +375,14 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
     self.safety.set_timer(2 * self.RADAR_PROBE_INTERVAL_US)
     self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
 
+  def test_wake_probe_disabled_after_first_radar_contact(self):
+    # once the radar has proven it transmits, a sleeping spur stays quiet
+    self._mark_radar_alive()
+    self.safety.set_timer(self.RADAR_LINK_TIMEOUT_US + self.RADAR_PROBE_INTERVAL_US)
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+    self.safety.set_timer(self.RADAR_LINK_TIMEOUT_US + 3 * self.RADAR_PROBE_INTERVAL_US)
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
   def test_uds_range_always_forwards_to_radar(self):
     # diagnostic requests must reach the radar even when the link gate is closed
     # (UDS sessions can legitimately pause the radar's broadcasts)
