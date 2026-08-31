@@ -291,6 +291,7 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
   TX_MSGS = []
   RADAR_TX_QUEUE_MIN_SLOTS = 50
   RADAR_LINK_TIMEOUT_US = 200000
+  RADAR_PROBE_INTERVAL_US = 1000000
   NON_SCC_ADDR = 0x123
   RADAR_AUX_ADDR = 0x4A2
   SCC_ADDRS = (0x420, 0x421, 0x50A, 0x389)
@@ -356,6 +357,38 @@ class TestHyundaiESCCFwdSafety(common.PandaSafetyTestBase):
 
     self._mark_radar_alive()
     self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+  def test_radar_frame_via_fwd_hook_opens_link(self):
+    # production calls the fwd hook before the rx hook, so the radar's own
+    # first forwarded frame must already open the link
+    self.assertEqual(0, self.safety.safety_fwd_hook(2, self.NON_SCC_ADDR))
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+  def test_wake_probe_passes_one_frame_per_second(self):
+    # radar never seen: exactly one car frame per probe interval passes through
+    self.safety.set_timer(self.RADAR_PROBE_INTERVAL_US)
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+    self.safety.set_timer(2 * self.RADAR_PROBE_INTERVAL_US - 1)
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+    self.safety.set_timer(2 * self.RADAR_PROBE_INTERVAL_US)
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+
+  def test_uds_range_always_forwards_to_radar(self):
+    # diagnostic requests must reach the radar even when the link gate is closed
+    # (UDS sessions can legitimately pause the radar's broadcasts)
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, 0x7D0))
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, 0x7D0))
+
+    self._mark_radar_alive()
+    self.safety.set_timer(self.RADAR_LINK_TIMEOUT_US + 1)
+    self.assertEqual(-1, self.safety.safety_fwd_hook(0, self.NON_SCC_ADDR))
+    self.assertEqual(2, self.safety.safety_fwd_hook(0, 0x7D0))
+
+  def test_scc_block_inactive_at_boot(self):
+    # no comma SCC ever seen: radar SCC must pass from the very first frame
+    self.assertEqual(0, self.safety.safety_fwd_hook(2, 0x420))
 
   def test_car_to_radar_drops_when_radar_queue_below_threshold(self):
     self._mark_radar_alive()

@@ -302,20 +302,28 @@ static void tick_handler(void) {
 #endif
 
 #if defined(ESCC) && defined(STM32H7)
-    // With the radar asleep nothing ACKs the spur, so a queued frame would retry
-    // until the error-passive reset path fires. Once the link gate closes, drop
-    // whatever is still queued or in the TX FIFO and leave the bus quiet.
-    if (!escc_radar_link_active) {
+    // Recompute link state from the timer instead of trusting the cached flag:
+    // if both buses go quiet the fwd hook stops running and the flag goes stale.
+    // The expiry also latches escc_radar_seen off so a 32-bit timer alias
+    // ~71.6min later cannot spuriously reopen the link. Only act in ESCC mode:
+    // in ALLOUTPUT (radar maintenance/reflash) the host owns bus 2.
+    if (escc_radar_seen && (get_ts_elapsed(MICROSECOND_TIMER->CNT, escc_radar_last_seen) > RADAR_LINK_TIMEOUT_US)) {
+      escc_radar_seen = false;
+    }
+    if (!escc_radar_seen && (current_safety_mode == SAFETY_HYUNDAI_ESCC)) {
+      escc_radar_link_active = false;
       const uint8_t radar_can_num = CAN_NUM_FROM_BUS_NUM(RADAR_BUS);
       FDCAN_GlobalTypeDef *radar_fdcan = CANIF_FROM_CAN_NUM(radar_can_num);
-      const bool tx_fifo_busy = (radar_fdcan->TXFQS & FDCAN_TXFQS_TFQF) != 0U ||
+      ENTER_CRITICAL();
+      // Flush only on no-ACK evidence (a probe or leftover frame stuck retrying
+      // with errors). A quiet-but-ACKing radar (e.g. UDS session) drains fine.
+      const bool tx_fifo_busy = ((radar_fdcan->TXFQS & FDCAN_TXFQS_TFQF) != 0U) ||
                                 ((radar_fdcan->TXFQS & FDCAN_TXFQS_TFFL) < FDCAN_TX_FIFO_EL_CNT);
-      if (can_slots_empty(can_queues[RADAR_BUS]) < can_queues[RADAR_BUS]->fifo_size - 1U) {
+      if (tx_fifo_busy && (can_health[radar_can_num].transmit_error_cnt > 0U)) {
         can_clear(can_queues[RADAR_BUS]);
-      }
-      if (tx_fifo_busy) {
         can_clear_send(radar_fdcan, radar_can_num);
       }
+      EXIT_CRITICAL();
     }
 #endif
 
